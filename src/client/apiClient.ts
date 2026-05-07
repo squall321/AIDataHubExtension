@@ -1,14 +1,9 @@
-export interface HealthInfo {
-  status: string;
-  version?: string;
-  auth_required?: boolean;
-}
-
-export interface VerifyResult {
-  ok: boolean;
-  key_name?: string;
-  agent_scopes?: string[];
-}
+import type {
+  IngestResponse,
+  MetaOptions,
+  SystemHealth,
+  VerifyKeyResponse,
+} from './types';
 
 export class ApiError extends Error {
   constructor(
@@ -30,7 +25,7 @@ function joinUrl(baseUrl: string, path: string): string {
 async function parseError(res: Response): Promise<ApiError> {
   const text = await res.text();
   let code = `HTTP_${res.status}`;
-  let message = text || res.statusText;
+  let message = text || res.statusText || `HTTP ${res.status}`;
   try {
     const body = JSON.parse(text);
     if (body?.error?.code) {
@@ -40,7 +35,7 @@ async function parseError(res: Response): Promise<ApiError> {
       message = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
     }
   } catch {
-    // body is not JSON
+    /* not JSON */
   }
   return new ApiError(code, message, res.status);
 }
@@ -57,30 +52,68 @@ export class ApiClient {
     return h;
   }
 
-  async health(): Promise<HealthInfo> {
-    const res = await fetch(joinUrl(this.baseUrl, '/health'), {
+  /** Newer richer health (`/api/system/health`) with fallback to legacy `/health`. */
+  async health(): Promise<SystemHealth> {
+    const rich = await fetch(joinUrl(this.baseUrl, '/api/system/health'), {
       method: 'GET',
       headers: this.headers(),
     });
-    if (!res.ok) throw await parseError(res);
-    return (await res.json()) as HealthInfo;
+    if (rich.ok) {
+      return (await rich.json()) as SystemHealth;
+    }
+    if (rich.status !== 404) throw await parseError(rich);
+
+    // fallback — older deployments only expose minimal /health
+    const legacy = await fetch(joinUrl(this.baseUrl, '/health'), {
+      method: 'GET',
+      headers: this.headers(),
+    });
+    if (!legacy.ok) throw await parseError(legacy);
+    const body = (await legacy.json()) as { status?: string };
+    return {
+      status: body.status ?? 'ok',
+      version: 'unknown',
+      auth_required: false,
+      build: 'legacy',
+    };
   }
 
-  async verifyKey(): Promise<VerifyResult> {
+  async verifyKey(): Promise<VerifyKeyResponse> {
     const res = await fetch(joinUrl(this.baseUrl, '/api/auth/keys/verify'), {
       method: 'POST',
       headers: this.headers(),
     });
-    if (res.status === 404) {
-      // Backend hasn't shipped /verify yet — fall back to /api/agents probe.
-      const probe = await fetch(joinUrl(this.baseUrl, '/api/agents'), {
-        method: 'GET',
-        headers: this.headers(),
-      });
-      if (probe.ok) return { ok: true };
-      throw await parseError(probe);
-    }
     if (!res.ok) throw await parseError(res);
-    return (await res.json()) as VerifyResult;
+    return (await res.json()) as VerifyKeyResponse;
+  }
+
+  async getOptions(): Promise<MetaOptions> {
+    const res = await fetch(joinUrl(this.baseUrl, '/api/meta/options'), {
+      method: 'GET',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw await parseError(res);
+    return (await res.json()) as MetaOptions;
+  }
+
+  /**
+   * `/api/convert/ingest` — multipart upload.
+   * Builds the form locally; the actual upload (with progress) happens in the
+   * webview's `uploader.ts` so we don't shuttle file bytes across the postMessage
+   * bridge. This method exists for host-side smoke tests / future Electron work.
+   */
+  async ingest(file: Blob, filename: string, fields: Record<string, string>): Promise<IngestResponse> {
+    const fd = new FormData();
+    fd.append('file', file, filename);
+    for (const [k, v] of Object.entries(fields)) {
+      if (v !== undefined && v !== null && v !== '') fd.append(k, v);
+    }
+    const res = await fetch(joinUrl(this.baseUrl, '/api/convert/ingest'), {
+      method: 'POST',
+      headers: this.headers(),
+      body: fd,
+    });
+    if (!res.ok) throw await parseError(res);
+    return (await res.json()) as IngestResponse;
   }
 }

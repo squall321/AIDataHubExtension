@@ -2,7 +2,18 @@
 
 `AI_data/api_server` 를 백엔드로 사용하여, 사업부 문서/데이터를 **VS Code 안에서 드래그&드롭만으로 적재**할 수 있게 해주는 확장.
 
-> 본 폴더는 **계획 단계** 입니다. 실제 구현 전 [`docs/PLAN.md`](docs/PLAN.md) 를 먼저 확인하세요.
+> **상태**: P3~P5 (Welcome / DropZone / Form / Upload / Result 화면 모두 동작). 다음은 `.vsix` 패키징 + e2e 테스트.
+
+## 빌드 / 실행
+
+```powershell
+npm install
+npx tsc -p .            # → out/
+# F5 (VS Code Extension Development Host) 또는
+npx @vscode/vsce package  # .vsix 패키징
+```
+
+활성화 시 connected=false 면 새 탭에 Welcome 자동 오픈. URL/API Key 입력 후 Save & Continue → DropZone → 파일 드롭 → 폼 → Send.
 
 ## 목표
 
